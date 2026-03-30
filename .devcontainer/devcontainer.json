@@ -1,0 +1,19 @@
+{
+  "name": "Claude Code Workspace",
+  "image": "mcr.microsoft.com/devcontainers/universal:2",
+
+  "postStartCommand": "command -v claude >/dev/null 2>&1 || (curl -fsSL https://cli.claude.com/install.sh | sh)",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "anthropics.claude-code"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "files.autoSave": "afterDelay",
+        "files.autoSaveDelay": 1000
+      }
+    }
+  }
+}
