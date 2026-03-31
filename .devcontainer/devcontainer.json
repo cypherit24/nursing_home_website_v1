@@ -2,12 +2,10 @@
   "name": "Claude Code Workspace",
   "image": "mcr.microsoft.com/devcontainers/universal:2",
 
-  "postStartCommand": "command -v claude >/dev/null 2>&1 || (curl -fsSL https://cli.claude.com/install.sh | sh)",
-
+  "postCreateCommand": "npm install -g @anthropic-ai/claude-code",
   "customizations": {
     "vscode": {
       "extensions": [
-        "anthropics.claude-code",
         "Continue.continue"
       ],
       "settings": {
