@@ -21,5 +21,18 @@
       "Bash(rm *)",
       "Bash(sudo *)"
     ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'if echo \"$CLAUDE_TOOL_INPUT\" | grep -qi \"dangerouslySetInnerHTML\"; then echo \"BLOCKED: dangerouslySetInnerHTML 사용 금지 (Security Rule S1)\" >&2; exit 2; fi'"
+          }
+        ]
+      }
+    ]
   }
 }
