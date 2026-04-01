@@ -2,7 +2,7 @@
   "name": "Claude Code Workspace",
   "image": "mcr.microsoft.com/devcontainers/universal:2",
 
-  "postCreateCommand": "npm install -g @anthropic-ai/claude-code",
+  "postCreateCommand": "npm install -g @anthropic-ai/claude-code && npm install -g pm2",
   "customizations": {
     "vscode": {
       "extensions": [
