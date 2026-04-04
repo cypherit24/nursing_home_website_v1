@@ -23,6 +23,17 @@
     ]
   },
   "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'CHANGED=$(git diff --name-only HEAD -- src/ .github/ supabase/ 2>/dev/null | head -20); if [ -n \"$CHANGED\" ]; then echo \"\"; echo \"========================================\"; echo \"  QA 검증 대기: 변경된 파일 목록\"; echo \"========================================\"; echo \"$CHANGED\"; echo \"----------------------------------------\"; echo \"  Continue IDE에서 @agentC-qa 실행하세요\"; echo \"  첨부: 위 변경 파일들 @멘션\"; echo \"========================================\"; echo \"\"; fi'"
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Edit|Write",
