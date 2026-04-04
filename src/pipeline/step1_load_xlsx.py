@@ -38,22 +38,32 @@ logger = logging.getLogger(__name__)
 # 상수
 # ---------------------------------------------------------------------------
 COLUMN_MAP: dict[str, str] = {
-    "장기요양기관기호": "facility_code",
-    "기관명": "name",
-    "시도": "sido",
-    "시군구": "sigungu",
-    "주소": "address",
-    "대표자명": "representative_name",
-    "전화번호": "phone",
+    "장기요양기관코드": "facility_code",
+    "장기요양기관이름": "name",
+    "기관별 상세주소": "address",
 }
 
-REQUIRED: list[str] = ["장기요양기관기호", "기관명", "시도", "시군구"]
+# sido, sigungu는 "시도 시군구 법정동명" 컬럼에서 파싱하므로 COLUMN_MAP에 포함하지 않음
+REGION_COLUMN: str = "시도 시군구 법정동명"
+
+REQUIRED: list[str] = ["장기요양기관코드", "장기요양기관이름", REGION_COLUMN]
 
 # facility_code 형식: 영문+숫자 조합, 최대 20자 (S7)
 FACILITY_CODE_MAX_LEN: int = 20
 
 # 이전 실행에서 확인된 컬럼 목록 (변경 감지 기준)
-KNOWN_COLUMNS: list[str] = list(COLUMN_MAP.keys())
+KNOWN_COLUMNS: list[str] = [
+    "장기요양기관코드",
+    "장기요양기관이름",
+    "우편번호",
+    "시도코드",
+    "시군구코드",
+    "법정동코드",
+    "시도 시군구 법정동명",
+    "지정일자",
+    "설치신고일자",
+    "기관별 상세주소",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +127,7 @@ def parse_xlsx(raw_bytes: bytes, test_mode: bool = False) -> pd.DataFrame:
     # facility_code 컬럼을 str로 읽어 앞자리 0 보호 (S7)
     df = pd.read_excel(
         io.BytesIO(raw_bytes),
-        dtype={"장기요양기관기호": str},
+        dtype={"장기요양기관코드": str},
         engine="openpyxl",
     )
     logger.info("xlsx 파싱 완료: 총 %d행", len(df))
@@ -128,25 +138,48 @@ def parse_xlsx(raw_bytes: bytes, test_mode: bool = False) -> pd.DataFrame:
     # 2. 컬럼 변경 감지
     detect_column_changes(df)
 
-    # 3. 컬럼 rename
+    # 3. "시도 시군구 법정동명"에서 sido/sigungu 파싱
+    df = _parse_region_column(df)
+
+    # 4. 컬럼 rename
     df = df.rename(columns=COLUMN_MAP)
 
-    # 4. facility_code NaN 행 제거
+    # 5. facility_code NaN 행 제거
     before = len(df)
     df = df[df["facility_code"].notna()].copy()
     removed = before - len(df)
     if removed > 0:
         logger.warning("facility_code NaN 행 %d건 제거", removed)
 
-    # 5. facility_code 형식 검증 및 str 보장 (S7)
+    # 6. facility_code 형식 검증 및 str 보장 (S7)
     df["facility_code"] = df["facility_code"].astype(str).str.strip()
 
-    # 6. TEST_MODE 제한
+    # 7. TEST_MODE 제한
     if test_mode:
         df = df.head(100)
         logger.info("TEST_MODE: %d건으로 제한", len(df))
 
     logger.info("파싱 후 최종 행 수: %d", len(df))
+    return df
+
+
+def _parse_region_column(df: pd.DataFrame) -> pd.DataFrame:
+    """'시도 시군구 법정동명' 컬럼에서 sido, sigungu를 파싱합니다.
+
+    예: "서울특별시 종로구 구기동" → sido="서울특별시", sigungu="종로구"
+    공백 기준 split: 첫 번째 = sido, 두 번째 = sigungu.
+
+    Args:
+        df: REGION_COLUMN을 포함한 DataFrame.
+
+    Returns:
+        sido, sigungu 컬럼이 추가된 DataFrame.
+    """
+    parts = df[REGION_COLUMN].astype(str).str.split(n=2, expand=True)
+    df["sido"] = parts[0] if 0 in parts.columns else None
+    df["sigungu"] = parts[1] if 1 in parts.columns else None
+    logger.info("시도/시군구 파싱 완료 (sido=%d, sigungu=%d non-null)",
+                df["sido"].notna().sum(), df["sigungu"].notna().sum())
     return df
 
 
@@ -182,8 +215,8 @@ def upsert_to_db(df: pd.DataFrame) -> dict[str, int]:
     """
     client = get_client()
 
-    # upsert 대상 컬럼만 추출 (DB 컬럼에 매핑된 것만)
-    db_columns = list(COLUMN_MAP.values())
+    # upsert 대상 컬럼만 추출 (COLUMN_MAP + 파싱으로 생성된 sido/sigungu)
+    db_columns = list(COLUMN_MAP.values()) + ["sido", "sigungu"]
     available_cols = [c for c in db_columns if c in df.columns]
     records = df[available_cols].to_dict(orient="records")
 

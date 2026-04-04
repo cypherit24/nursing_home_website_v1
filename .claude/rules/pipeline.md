@@ -14,12 +14,13 @@ paths:
 - **COLUMN_MAP 헤더명 기반 매핑** — 인덱스(A,B,G) 대신 헤더명 사용
   ```python
   COLUMN_MAP = {
-      "장기요양기관기호": "facility_code",
-      "기관명": "name",
-      "시도": "sido",
-      "시군구": "sigungu",
+      "장기요양기관코드": "facility_code",
+      "장기요양기관이름": "name",
+      "기관별 상세주소": "address",
   }
+  REGION_COLUMN = "시도 시군구 법정동명"  # → sido, sigungu 파싱
   ```
+- **sido/sigungu 파싱**: `시도 시군구 법정동명` 컬럼을 공백 split하여 sido(첫 번째), sigungu(두 번째) 추출
 - **필수 컬럼 검증**: 파싱 시작 전 REQUIRED 컬럼 존재 확인, 누락 시 ValueError
 - **facility_code dtype=str 필수** (앞자리 0 보호)
 - **변경 감지**: 기존 컬럼 목록과 비교, 차이 발견 시 GitHub Issue 자동 생성

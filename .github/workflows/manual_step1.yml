@@ -27,6 +27,7 @@ jobs:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       TEST_MODE: ${{ inputs.test_mode }}
+      XLSX_FILE_NAME: ${{ secrets.XLSX_FILE_NAME }}
 
     steps:
       - name: Checkout repository

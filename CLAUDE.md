@@ -23,8 +23,9 @@
 - 설계 문서: 변경 계획을 확인 요청하기 **전에** 반드시 `docs/` 폴더에 .md 형식으로 저장한다 (읽기 전용, 파일명: 작업명-v1.md / 재작업 시 v2.md)
 - 에이전트 구조 설계: `docs/agents/` 폴더에 저장
 - 양식/템플릿: `docs/templates/` 폴더에 저장
-- 작업 산출물: `outputs/` 폴더에 저장 (reviews/, handoff/ 등)
+- 작업 산출물: `outputs/` 폴더에 저장 (reviews/, handoff/, changes/ 등)
 - 검증 결과물: `outputs/reviews/` 폴더에 저장
+- 변경 기록: `outputs/changes/` 폴더에 저장 (파일명: `T{번호}-변경요약-v1.md`)
 - 인수인계 기록: `outputs/handoff/` 폴더에 저장 (파일명: `from-to-작업명-v1.md`, 예: `opus-sonnet-schema-design-v1.md`)
 
 ## Security Rules (S1~S7)
@@ -63,3 +64,4 @@
 - 수정 전에 항상 변경 계획을 먼저 보여준다
 - 수정 후에는 무엇을 바꿨는지 5줄 이내로 요약한다
 - 불확실한 부분이 있으면 추측하지 말고 askuserquestion으로 질문한다
+- **변경 기록**: 기존 코드를 수정할 때 `outputs/changes/T{번호}-변경요약-v1.md`에 기록한다. 내용: (1) 문제/원인, (2) 수정 방안, (3) 프로젝트 전반 영향 (영향 있는 파일 + 영향 없는 파일과 그 이유)

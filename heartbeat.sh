@@ -13,3 +13,5 @@ done
 #npx pm2 start heartbeat.sh --name "claude-heartbeat"
 #npx pm2 stop claude-heartbeat
 #npx pm2 logs claude-heartbeat
+
+#pm2 start heartbeat.sh --name "claude-heartbeat" && pm2 logs claude-heartbeat
