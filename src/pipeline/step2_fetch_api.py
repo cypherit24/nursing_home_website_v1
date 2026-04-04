@@ -17,8 +17,8 @@ B550928 공공데이터 API 5개 OP를 순차 호출한 뒤 상세 정보를 업
     S7: facility_code 형식 검증 후 사용. SQL은 supabase-py parameterized query 사용.
 
 API:
-    B550928 searchLtcInsttService02
-    Base URL: http://apis.data.go.kr/B550928/searchLtcInsttService02
+    B550928 getLtcInsttDetailInfoService02
+    Base URL: https://apis.data.go.kr/B550928/getLtcInsttDetailInfoService02
 """
 
 import asyncio
@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # 상수
 # ---------------------------------------------------------------------------
-BASE_URL = "http://apis.data.go.kr/B550928/searchLtcInsttService02"
+BASE_URL = "https://apis.data.go.kr/B550928/getLtcInsttDetailInfoService02"
 
 ENDPOINTS: dict[str, str] = {
     "op1": "/getGeneralSttusDetailInfoItem02",

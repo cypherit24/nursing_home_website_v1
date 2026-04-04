@@ -11,12 +11,16 @@ test_step2.py — step2_fetch_api.py 단위 테스트
     5. 비급여 전처리 (단일 dict vs 리스트, kind 코드 1/2/5/6)
     6. adminPttnCd 폴백 로직
     7. 원자적 업데이트 검증 (OP1 실패 → detail_fetched_at 미설정)
+    8. TEST_MODE 검증 (T10): 5건 제한, 환경변수 처리, API 키 미설정 에러
+    9. 스키마 레퍼런스 저장 검증 (T10): 파일 생성, 변경 감지 경고
 
 참고: pytest-asyncio 미설치 환경이므로 비동기 테스트는 asyncio.run()으로 래핑합니다.
 """
 
 import asyncio
 import json
+import os
+import tempfile
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -27,11 +31,14 @@ from src.pipeline.step2_fetch_api import (
     _check_result_code,
     _extract_item,
     _parse_xml_response,
+    _save_schema_reference,
     assemble_phone,
     fetch_op1,
     fetch_op,
+    fetch_pending_facilities,
     parse_nonbenefit_items,
     process_facility,
+    run,
     validate_facility_code,
 )
 
