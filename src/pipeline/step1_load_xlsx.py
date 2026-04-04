@@ -289,10 +289,19 @@ def verify_data_integrity() -> None:
             null_counts["sigungu"],
         )
 
+        failed_cols: list[str] = []
         for col_name, count in null_counts.items():
             if count > 0:
                 logger.warning("경고: %s NULL 행 존재 (%d건)", col_name, count)
+                failed_cols.append(col_name)
 
+        if failed_cols:
+            raise RuntimeError(
+                f"정합성 검증 실패: 필수 컬럼 NULL 발견 — {failed_cols}"
+            )
+
+    except RuntimeError:
+        raise
     except Exception as exc:  # noqa: BLE001
         logger.error("정합성 검증 실패: %s", exc)
 

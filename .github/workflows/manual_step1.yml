@@ -1,0 +1,45 @@
+name: Manual Step1 — Load XLSX to nursing_homes
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: '실행 확인 (실수 방지 안전장치)'
+        required: true
+        type: choice
+        options:
+          - 'yes'
+      test_mode:
+        description: 'TEST_MODE: true=100건만 처리, false=전체 처리'
+        required: true
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+        default: 'false'
+
+jobs:
+  load-xlsx:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      TEST_MODE: ${{ inputs.test_mode }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run step1_load_xlsx
+        run: python -m src.pipeline.step1_load_xlsx
