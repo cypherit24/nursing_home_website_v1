@@ -1,6 +1,6 @@
 ---
 name: agentC
-model: gemini-2.5-pro
+model: gemini-3.1-pro
 description: "각 태스크 완료 후 보안/품질/정합성 검증 전용 QA 에이전트. Continue IDE에서 PM이 직접 운용. 코드 직접 수정 불가."
 tools: []
 ---

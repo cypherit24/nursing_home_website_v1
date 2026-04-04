@@ -23,6 +23,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.pipeline.step2_fetch_api import (
+    RateLimitError,
     _check_result_code,
     _extract_item,
     _parse_xml_response,
@@ -469,7 +470,7 @@ class TestAtomicUpdate:
     """OP1 실패 시 detail_fetched_at이 설정되지 않음을 검증합니다."""
 
     def test_no_db_update_when_op1_fails(self):
-        """OP1이 실패하면 DB 업데이트 없이 False를 반환해야 합니다."""
+        """OP1이 실패하면 DB 업데이트 없이 (False, False)를 반환해야 합니다."""
         semaphore = asyncio.Semaphore(5)
 
         # fetch_op1은 async 함수이므로 AsyncMock 사용
@@ -480,18 +481,19 @@ class TestAtomicUpdate:
             with patch("src.pipeline.step2_fetch_api._log_pipeline_error") as mock_log:
                 with patch("src.pipeline.step2_fetch_api.get_client") as mock_get_client:
                     mock_session = MagicMock()
-                    result = run_async(
+                    success, was_429 = run_async(
                         process_facility(mock_session, "A0001", "TEST_KEY", semaphore)
                     )
 
-        assert result is False
+        assert success is False
+        assert was_429 is False
         # DB 업데이트(get_client 호출)는 발생하지 않아야 함
         mock_get_client.assert_not_called()
         # 에러가 pipeline_errors에 기록되어야 함
         mock_log.assert_called_once()
 
-    def test_db_update_called_when_op1_succeeds(self):
-        """OP1이 성공하면 DB 업데이트가 호출되어야 합니다."""
+    def test_db_update_called_when_all_ops_succeed(self):
+        """OP1~OP4 모두 성공하면 DB 업데이트가 호출되어야 합니다."""
         semaphore = asyncio.Semaphore(5)
 
         op1_item = {
@@ -500,6 +502,9 @@ class TestAtomicUpdate:
             "locTelNo2": "111",
             "locTelNo3": "2222",
         }
+        op2_item = {"instlPsncnt": "30", "nowPsncnt": "25"}
+        op3_item = {"nonpayKind": "1", "nonpayTgtAmt": "10000"}
+        op4_item = {"crgrPsncnt": "10"}
 
         # Supabase mock
         mock_table = MagicMock()
@@ -508,28 +513,32 @@ class TestAtomicUpdate:
         mock_client = MagicMock()
         mock_client.table.return_value = mock_table
 
+        async def mock_fetch_op(session, op_key, fc, ak, admin=None):
+            return {"op2": op2_item, "op3": op3_item, "op4": op4_item}[op_key]
+
         with patch(
             "src.pipeline.step2_fetch_api.fetch_op1",
             new=AsyncMock(return_value=(op1_item, "A03")),
         ):
             with patch(
                 "src.pipeline.step2_fetch_api.fetch_op",
-                new=AsyncMock(return_value=None),
+                side_effect=mock_fetch_op,
             ):
                 with patch("src.pipeline.step2_fetch_api.get_client", return_value=mock_client):
                     mock_session = MagicMock()
-                    result = run_async(
+                    success, was_429 = run_async(
                         process_facility(mock_session, "A0001", "TEST_KEY", semaphore)
                     )
 
-        assert result is True
+        assert success is True
+        assert was_429 is False
         mock_table.update.assert_called_once()
         # detail_fetched_at이 update 호출에 포함되어야 함
         call_args = mock_table.update.call_args[0][0]
         assert "detail_fetched_at" in call_args
 
     def test_invalid_facility_code_skips_api_call(self):
-        """유효하지 않은 facility_code는 API 호출 없이 False를 반환해야 합니다."""
+        """유효하지 않은 facility_code는 API 호출 없이 (False, False)를 반환해야 합니다."""
         semaphore = asyncio.Semaphore(5)
 
         with patch(
@@ -538,15 +547,16 @@ class TestAtomicUpdate:
         ) as mock_op1:
             with patch("src.pipeline.step2_fetch_api._log_pipeline_error"):
                 mock_session = MagicMock()
-                result = run_async(
+                success, was_429 = run_async(
                     process_facility(mock_session, "한글코드!!!", "TEST_KEY", semaphore)
                 )
 
-        assert result is False
+        assert success is False
+        assert was_429 is False
         mock_op1.assert_not_called()
 
     def test_db_failure_returns_false(self):
-        """DB 업데이트 실패 시 False를 반환하고 에러를 기록해야 합니다."""
+        """DB 업데이트 실패 시 (False, False)를 반환하고 에러를 기록해야 합니다."""
         semaphore = asyncio.Semaphore(5)
 
         op1_item = {
@@ -555,6 +565,9 @@ class TestAtomicUpdate:
             "locTelNo2": "111",
             "locTelNo3": "2222",
         }
+        op2_item = {"instlPsncnt": "30", "nowPsncnt": "25"}
+        op3_item = {"nonpayKind": "1", "nonpayTgtAmt": "10000"}
+        op4_item = {"crgrPsncnt": "10"}
 
         # DB 업데이트 실패 mock
         mock_table = MagicMock()
@@ -563,20 +576,89 @@ class TestAtomicUpdate:
         mock_client = MagicMock()
         mock_client.table.return_value = mock_table
 
+        async def mock_fetch_op(session, op_key, fc, ak, admin=None):
+            return {"op2": op2_item, "op3": op3_item, "op4": op4_item}[op_key]
+
         with patch(
             "src.pipeline.step2_fetch_api.fetch_op1",
             new=AsyncMock(return_value=(op1_item, "A03")),
         ):
             with patch(
                 "src.pipeline.step2_fetch_api.fetch_op",
-                new=AsyncMock(return_value=None),
+                side_effect=mock_fetch_op,
             ):
                 with patch("src.pipeline.step2_fetch_api.get_client", return_value=mock_client):
                     with patch("src.pipeline.step2_fetch_api._log_pipeline_error") as mock_log:
                         mock_session = MagicMock()
-                        result = run_async(
+                        success, was_429 = run_async(
                             process_facility(mock_session, "A0001", "TEST_KEY", semaphore)
                         )
 
-        assert result is False
+        assert success is False
+        assert was_429 is False
         mock_log.assert_called_once()
+
+    def test_no_update_when_op2_fails(self):
+        """OP2 실패 시 detail_fetched_at 업데이트 없이 (False, False)를 반환해야 합니다."""
+        semaphore = asyncio.Semaphore(5)
+
+        op1_item = {"adminPttnCd": "A03", "locTelNo1": "02", "locTelNo2": "111", "locTelNo3": "2222"}
+
+        async def mock_fetch_op(session, op_key, fc, ak, admin=None):
+            if op_key == "op2":
+                return None  # OP2 실패
+            return {"crgrPsncnt": "10"}
+
+        with patch("src.pipeline.step2_fetch_api.fetch_op1", new=AsyncMock(return_value=(op1_item, "A03"))):
+            with patch("src.pipeline.step2_fetch_api.fetch_op", side_effect=mock_fetch_op):
+                with patch("src.pipeline.step2_fetch_api.get_client") as mock_get_client:
+                    with patch("src.pipeline.step2_fetch_api._log_pipeline_error"):
+                        mock_session = MagicMock()
+                        success, was_429 = run_async(
+                            process_facility(mock_session, "A0001", "TEST_KEY", semaphore)
+                        )
+
+        assert success is False
+        assert was_429 is False
+        mock_get_client.assert_not_called()
+
+    def test_no_update_when_op4_fails(self):
+        """OP4 실패 시 detail_fetched_at 업데이트 없이 (False, False)를 반환해야 합니다."""
+        semaphore = asyncio.Semaphore(5)
+
+        op1_item = {"adminPttnCd": "A03", "locTelNo1": "02", "locTelNo2": "111", "locTelNo3": "2222"}
+        op2_item = {"instlPsncnt": "30", "nowPsncnt": "25"}
+        op3_item = {"nonpayKind": "1", "nonpayTgtAmt": "10000"}
+
+        async def mock_fetch_op(session, op_key, fc, ak, admin=None):
+            return {"op2": op2_item, "op3": op3_item, "op4": None}[op_key]
+
+        with patch("src.pipeline.step2_fetch_api.fetch_op1", new=AsyncMock(return_value=(op1_item, "A03"))):
+            with patch("src.pipeline.step2_fetch_api.fetch_op", side_effect=mock_fetch_op):
+                with patch("src.pipeline.step2_fetch_api.get_client") as mock_get_client:
+                    with patch("src.pipeline.step2_fetch_api._log_pipeline_error"):
+                        mock_session = MagicMock()
+                        success, was_429 = run_async(
+                            process_facility(mock_session, "A0001", "TEST_KEY", semaphore)
+                        )
+
+        assert success is False
+        assert was_429 is False
+        mock_get_client.assert_not_called()
+
+    def test_rate_limit_returns_429_flag(self):
+        """429 rate limit 발생 시 (False, True)를 반환해야 합니다."""
+        semaphore = asyncio.Semaphore(5)
+
+        with patch(
+            "src.pipeline.step2_fetch_api.fetch_op1",
+            new=AsyncMock(side_effect=RateLimitError("rate limited")),
+        ):
+            with patch("src.pipeline.step2_fetch_api._log_pipeline_error"):
+                mock_session = MagicMock()
+                success, was_429 = run_async(
+                    process_facility(mock_session, "A0001", "TEST_KEY", semaphore)
+                )
+
+        assert success is False
+        assert was_429 is True

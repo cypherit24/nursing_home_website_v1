@@ -74,8 +74,8 @@ SCHEMA_REFERENCE_PATH = os.path.join(
     os.path.dirname(__file__), "schemas", "step2_api_reference.json"
 )
 
-# 전역: 최초 성공 응답 저장 여부
-_schema_reference_saved = False
+# 전역: OP별 스키마 레퍼런스 저장 여부
+_saved_ops: set[str] = set()
 
 
 # ---------------------------------------------------------------------------
@@ -178,9 +178,9 @@ def _save_schema_reference(op_name: str, item: dict[str, Any]) -> None:
         op_name: 오퍼레이션 이름 (예: 'op1').
         item: API 응답 item dict.
     """
-    global _schema_reference_saved
+    global _saved_ops
 
-    if _schema_reference_saved:
+    if op_name in _saved_ops:
         return
 
     # 기존 레퍼런스가 있으면 로드하여 비교
@@ -214,8 +214,8 @@ def _save_schema_reference(op_name: str, item: dict[str, Any]) -> None:
         os.makedirs(os.path.dirname(SCHEMA_REFERENCE_PATH), exist_ok=True)
         with open(SCHEMA_REFERENCE_PATH, "w", encoding="utf-8") as f:
             json.dump(existing, f, ensure_ascii=False, indent=2)
-        logger.info("스키마 레퍼런스 저장 완료: %s", SCHEMA_REFERENCE_PATH)
-        _schema_reference_saved = True
+        logger.info("스키마 레퍼런스 저장 완료 (%s): %s", op_name, SCHEMA_REFERENCE_PATH)
+        _saved_ops.add(op_name)
     except Exception as exc:  # noqa: BLE001
         logger.warning("스키마 레퍼런스 저장 실패: %s", exc)
 
@@ -314,6 +314,10 @@ def assemble_phone(v1: Optional[str], v2: Optional[str], v3: Optional[str]) -> O
 # ---------------------------------------------------------------------------
 
 
+class RateLimitError(Exception):
+    """429/503 응답으로 모든 재시도가 실패했음을 나타냅니다."""
+
+
 async def _fetch_with_backoff(
     session: aiohttp.ClientSession,
     url: str,
@@ -332,11 +336,16 @@ async def _fetch_with_backoff(
 
     Returns:
         응답 텍스트 또는 None (모든 재시도 실패 시).
+
+    Raises:
+        RateLimitError: 429/503 응답으로 모든 재시도가 실패한 경우.
     """
+    hit_rate_limit = False
     for attempt, delay in enumerate(BACKOFF_DELAYS):
         try:
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
                 if resp.status in (429, 503):
+                    hit_rate_limit = True
                     logger.warning(
                         "%s — HTTP %d, %ds 대기 후 재시도 (attempt=%d)",
                         facility_code, resp.status, delay, attempt + 1,
@@ -357,6 +366,8 @@ async def _fetch_with_backoff(
             await asyncio.sleep(delay)
 
     logger.error("%s — %s 모든 재시도 실패", facility_code, op_name)
+    if hit_rate_limit:
+        raise RateLimitError(f"{facility_code} — {op_name} rate limited")
     return None
 
 
@@ -491,7 +502,7 @@ async def process_facility(
     facility_code: str,
     api_key: str,
     semaphore: asyncio.Semaphore,
-) -> bool:
+) -> tuple[bool, bool]:
     """단일 시설에 대해 OP1~OP4를 호출하고 DB를 업데이트합니다.
 
     OP1~OP4 모두 성공 시에만 detail_fetched_at을 설정합니다 (원자적 업데이트).
@@ -504,7 +515,7 @@ async def process_facility(
         semaphore: 동시 처리 세마포어.
 
     Returns:
-        성공 여부.
+        (성공 여부, HTTP 429 발생 여부) 튜플.
     """
     async with semaphore:
         # S7: facility_code 형식 검증
@@ -515,88 +526,114 @@ async def process_facility(
                 step="step2",
                 error_message=f"유효하지 않은 facility_code 형식: {facility_code}",
             )
-            return False
+            return False, False
 
-        logger.info("처리 시작: %s", facility_code)
-        update_data: dict[str, Any] = {}
-
-        # OP1: 기관일반정보 + adminPttnCd 탐색
-        op1_item, admin_pttn_cd = await fetch_op1(session, facility_code, api_key)
-        if op1_item is None:
-            error_msg = f"OP1 실패: facility_code={facility_code}"
-            logger.error(error_msg)
-            _log_pipeline_error(facility_code=facility_code, step="step2", error_message=error_msg)
-            return False
-
-        # 전화번호 조합
-        if isinstance(op1_item, dict):
-            phone = assemble_phone(
-                op1_item.get("locTelNo1"),
-                op1_item.get("locTelNo2"),
-                op1_item.get("locTelNo3"),
-            )
-        else:
-            phone = None
-        if phone:
-            update_data["phone"] = phone
-
-        # OP2: 입소인원정보
-        op2_item = await fetch_op(session, "op2", facility_code, api_key, admin_pttn_cd)
-        if op2_item is None:
-            logger.warning("%s — OP2 데이터 없음 (비필수)", facility_code)
-        elif isinstance(op2_item, dict):
-            try:
-                cap = op2_item.get("instlPsncnt")
-                occ = op2_item.get("nowPsncnt")
-                if cap is not None:
-                    update_data["capacity"] = int(cap)
-                if occ is not None:
-                    update_data["current_occupancy"] = int(occ)
-            except (ValueError, TypeError) as exc:
-                logger.warning("%s — OP2 숫자 변환 실패: %s", facility_code, exc)
-
-        # OP3: 비급여정보
-        op3_item = await fetch_op(session, "op3", facility_code, api_key, admin_pttn_cd)
-        if op3_item is None:
-            logger.warning("%s — OP3 데이터 없음 (비필수)", facility_code)
-        else:
-            nonbenefit = parse_nonbenefit_items(op3_item)
-            for key, val in nonbenefit.items():
-                if val is not None:
-                    update_data[key] = val
-
-        # OP4: 인력정보
-        op4_item = await fetch_op(session, "op4", facility_code, api_key, admin_pttn_cd)
-        if op4_item is None:
-            logger.warning("%s — OP4 데이터 없음 (비필수)", facility_code)
-        elif isinstance(op4_item, dict):
-            try:
-                cgr = op4_item.get("crgrPsncnt")
-                if cgr is not None:
-                    update_data["caregiver_count"] = int(cgr)
-            except (ValueError, TypeError) as exc:
-                logger.warning("%s — OP4 숫자 변환 실패: %s", facility_code, exc)
-
-        # 원자적 업데이트: OP1 성공 시 detail_fetched_at 설정
-        update_data["detail_fetched_at"] = "now()"
-
-        # DB 업데이트 (supabase-py parameterized upsert — S7)
         try:
-            client = get_client()
-            client.table("nursing_homes").update(update_data).eq(
-                "facility_code", facility_code
-            ).execute()
-            logger.info("%s — DB 업데이트 완료: %s", facility_code, list(update_data.keys()))
-            return True
-        except Exception as exc:  # noqa: BLE001
-            error_msg = str(exc)
-            logger.error("%s — DB 업데이트 실패: %s", facility_code, error_msg)
+            return await _process_facility_ops(session, facility_code, api_key)
+        except RateLimitError:
+            logger.warning("%s — 429/503 rate limit으로 실패", facility_code)
             _log_pipeline_error(
                 facility_code=facility_code,
                 step="step2",
-                error_message=f"DB 업데이트 실패: {error_msg}",
+                error_message="429/503 rate limit 초과",
             )
-            return False
+            return False, True
+
+
+async def _process_facility_ops(
+    session: aiohttp.ClientSession,
+    facility_code: str,
+    api_key: str,
+) -> tuple[bool, bool]:
+    """process_facility 내부 로직. RateLimitError를 전파합니다."""
+    logger.info("처리 시작: %s", facility_code)
+    update_data: dict[str, Any] = {}
+
+    # OP1: 기관일반정보 + adminPttnCd 탐색
+    op1_item, admin_pttn_cd = await fetch_op1(session, facility_code, api_key)
+    if op1_item is None:
+        error_msg = f"OP1 실패: facility_code={facility_code}"
+        logger.error(error_msg)
+        _log_pipeline_error(facility_code=facility_code, step="step2", error_message=error_msg)
+        return False, False
+
+    # 전화번호 조합
+    if isinstance(op1_item, dict):
+        phone = assemble_phone(
+            op1_item.get("locTelNo1"),
+            op1_item.get("locTelNo2"),
+            op1_item.get("locTelNo3"),
+        )
+    else:
+        phone = None
+    if phone:
+        update_data["phone"] = phone
+
+    # OP2: 입소인원정보 (필수)
+    op2_item = await fetch_op(session, "op2", facility_code, api_key, admin_pttn_cd)
+    if op2_item is None:
+        error_msg = f"OP2 실패: facility_code={facility_code}"
+        logger.error(error_msg)
+        _log_pipeline_error(facility_code=facility_code, step="step2", error_message=error_msg)
+        return False, False
+    if isinstance(op2_item, dict):
+        try:
+            cap = op2_item.get("instlPsncnt")
+            occ = op2_item.get("nowPsncnt")
+            if cap is not None:
+                update_data["capacity"] = int(cap)
+            if occ is not None:
+                update_data["current_occupancy"] = int(occ)
+        except (ValueError, TypeError) as exc:
+            logger.warning("%s — OP2 숫자 변환 실패: %s", facility_code, exc)
+
+    # OP3: 비급여정보 (필수)
+    op3_item = await fetch_op(session, "op3", facility_code, api_key, admin_pttn_cd)
+    if op3_item is None:
+        error_msg = f"OP3 실패: facility_code={facility_code}"
+        logger.error(error_msg)
+        _log_pipeline_error(facility_code=facility_code, step="step2", error_message=error_msg)
+        return False, False
+    nonbenefit = parse_nonbenefit_items(op3_item)
+    for key, val in nonbenefit.items():
+        if val is not None:
+            update_data[key] = val
+
+    # OP4: 인력정보 (필수)
+    op4_item = await fetch_op(session, "op4", facility_code, api_key, admin_pttn_cd)
+    if op4_item is None:
+        error_msg = f"OP4 실패: facility_code={facility_code}"
+        logger.error(error_msg)
+        _log_pipeline_error(facility_code=facility_code, step="step2", error_message=error_msg)
+        return False, False
+    if isinstance(op4_item, dict):
+        try:
+            cgr = op4_item.get("crgrPsncnt")
+            if cgr is not None:
+                update_data["caregiver_count"] = int(cgr)
+        except (ValueError, TypeError) as exc:
+            logger.warning("%s — OP4 숫자 변환 실패: %s", facility_code, exc)
+
+    # 원자적 업데이트: OP1~OP4 모두 성공 시에만 detail_fetched_at 설정
+    update_data["detail_fetched_at"] = "now()"
+
+    # DB 업데이트 (supabase-py parameterized upsert — S7)
+    try:
+        client = get_client()
+        client.table("nursing_homes").update(update_data).eq(
+            "facility_code", facility_code
+        ).execute()
+        logger.info("%s — DB 업데이트 완료: %s", facility_code, list(update_data.keys()))
+        return True, False
+    except Exception as exc:  # noqa: BLE001
+        error_msg = str(exc)
+        logger.error("%s — DB 업데이트 실패: %s", facility_code, error_msg)
+        _log_pipeline_error(
+            facility_code=facility_code,
+            step="step2",
+            error_message=f"DB 업데이트 실패: {error_msg}",
+        )
+        return False, False
 
 
 # ---------------------------------------------------------------------------
@@ -773,17 +810,19 @@ async def run() -> None:
 
         for coro in asyncio.as_completed(tasks):
             try:
-                result = await coro
-                if result:
+                success, was_rate_limited = await coro
+                if success:
                     success_count += 1
                     consecutive_429_count = 0
                 else:
                     error_count += 1
-                    consecutive_429_count += 1
+                    if was_rate_limited:
+                        consecutive_429_count += 1
+                    else:
+                        consecutive_429_count = 0
             except Exception as exc:  # noqa: BLE001
                 logger.error("처리 중 예외 발생: %s", exc)
                 error_count += 1
-                consecutive_429_count += 1
 
             # 일일 제한 자동 중단
             if consecutive_429_count >= MAX_CONSECUTIVE_429:
