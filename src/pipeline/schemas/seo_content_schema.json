@@ -1,0 +1,41 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "SEO content schema for nursing home pages. S5: 이 파일 변경 시 src/frontend/types/seo-content.ts 동시 업데이트 필수.",
+  "type": "object",
+  "required": ["intro", "highlights", "care_services", "location_info", "facility_info", "summary"],
+  "additionalProperties": false,
+  "properties": {
+    "intro": {
+      "type": "string",
+      "minLength": 50,
+      "description": "시설 소개 문단 (50자 이상)"
+    },
+    "highlights": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 3,
+      "maxItems": 6,
+      "description": "시설 주요 특장점 목록 (3~6개)"
+    },
+    "care_services": {
+      "type": "string",
+      "minLength": 50,
+      "description": "제공 서비스 안내 문단 (50자 이상)"
+    },
+    "location_info": {
+      "type": "string",
+      "minLength": 30,
+      "description": "위치 및 교통 안내 문단 (30자 이상)"
+    },
+    "facility_info": {
+      "type": "string",
+      "minLength": 30,
+      "description": "시설 현황 및 규모 안내 문단 (30자 이상)"
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 50,
+      "description": "종합 요약 문단 (50자 이상)"
+    }
+  }
+}

@@ -10,6 +10,11 @@ tools:
   - Grep
   - "Bash(npm test)"
   - "Bash(npm run lint)"
+  - mcp__supabase__apply_migration
+  - mcp__supabase__execute_sql
+  - mcp__supabase__list_tables
+  - mcp__supabase__list_migrations
+  - mcp__supabase__list_extensions
 ---
 
 # Agent D — DevOps (Haiku)
